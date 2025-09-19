@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://hs-womenhealth-2.vercel.app/sitemap.xml

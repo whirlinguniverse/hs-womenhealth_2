@@ -9,7 +9,9 @@
       "Bash(rm:*)",
       "Bash(cp:*)",
       "Bash(git init:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git remote add:*)",
+      "WebFetch(domain:hs-womenhealth-2.vercel.app)"
     ],
     "deny": [],
     "ask": []
