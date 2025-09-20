@@ -5,6 +5,10 @@
     {
       "src": "proxy-server.js",
       "use": "@vercel/node"
+    },
+    {
+      "src": "*.{html,png,jpg,xml,txt}",
+      "use": "@vercel/static"
     }
   ],
   "routes": [
