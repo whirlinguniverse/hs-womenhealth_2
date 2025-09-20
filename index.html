@@ -2457,8 +2457,8 @@
                 // 本地開發環境
                 callingData.proxyUrl = 'http://localhost:3001';
             } else if (hostname.includes('vercel.app') || hostname.includes('netlify.app') || hostname.includes('github.io')) {
-                // 部署在靜態網站服務上，需要另外的代理服務器
-                callingData.proxyUrl = ''; // 可以設置為你的代理服務器URL
+                // 部署在靜態網站服務上，使用同域名的代理服務器
+                callingData.proxyUrl = `${protocol}//${hostname}`;
             } else {
                 // 自定義域名，假設代理服務器在同一域名下
                 callingData.proxyUrl = `${protocol}//${hostname}:3001`;
