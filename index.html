@@ -611,7 +611,7 @@
             flex-wrap: wrap;
         }
 
-        .refresh-btn, .sound-toggle {
+        .refresh-btn, .sound-toggle, .test-toggle {
             background: linear-gradient(45deg, #2c5aa0, #4a90e2);
             color: white;
             border: none;
@@ -625,9 +625,13 @@
             gap: 8px;
         }
 
-        .refresh-btn:hover, .sound-toggle:hover {
+        .refresh-btn:hover, .sound-toggle:hover, .test-toggle:hover {
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(74, 144, 226, 0.3);
+        }
+
+        .test-toggle.active {
+            background: linear-gradient(45deg, #28a745, #20c997);
         }
 
         .sound-toggle.muted {
@@ -1771,6 +1775,9 @@
                         <button class="sound-toggle" onclick="toggleSound()" id="sound-toggle">
                             <span class="sound-icon">🔊</span> 叫號提醒
                         </button>
+                        <button class="test-toggle" onclick="toggleTestMode()" id="test-toggle">
+                            <span class="test-icon">🧪</span> 測試模式
+                        </button>
                     </div>
 
                     <div class="calling-info">
@@ -1817,7 +1824,8 @@
             useWebSocket: true,
             callerId: '1028', // 惠生婦產科的caller ID
             apiUrl: 'https://www.mainpi.com/.ws_mainpi/',
-            ajaxUrl: 'https://www.mainpi.com/.ws_mainpi/'
+            ajaxUrl: 'https://www.mainpi.com/query', // 修正為正確的API端點
+            testMode: false // 測試模式開關
         };
 
         // 連接mainpi.com的真實API
@@ -1892,54 +1900,38 @@
 
         // AJAX方式獲取數據
         function fetchViaAjax(resolve, reject) {
-            const requestData = {
-                act: 'query_call',
-                caller_list: callingData.callerId
-            };
+            // 直接使用GET請求獲取頁面數據，然後解析
+            const requestUrl = `https://www.mainpi.com/query?i=${callingData.callerId}`;
 
             // 嘗試多種方式處理CORS問題
             const fetchOptions = [
-                // 方式1: 直接調用（如果mainpi.com支持CORS）
+                // 方式1: 使用CORS代理獲取完整頁面
                 {
-                    url: callingData.ajaxUrl,
+                    url: `https://api.allorigins.win/get?url=${encodeURIComponent(requestUrl)}`,
                     options: {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'Accept': 'application/json'
-                        },
-                        body: new URLSearchParams(requestData),
-                        mode: 'cors',
-                        credentials: 'omit'
-                    }
-                },
-                // 方式2: 使用CORS代理
-                {
-                    url: `https://api.allorigins.win/get?url=${encodeURIComponent(callingData.ajaxUrl)}`,
-                    options: {
-                        method: 'POST',
+                        method: 'GET',
                         headers: {
                             'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/x-www-form-urlencoded'
-                            },
-                            body: new URLSearchParams(requestData).toString()
-                        })
+                        }
                     }
                 },
-                // 方式3: 使用另一個CORS代理
+                // 方式2: 使用另一個CORS代理
                 {
-                    url: `https://cors-anywhere.herokuapp.com/${callingData.ajaxUrl}`,
+                    url: `https://cors-anywhere.herokuapp.com/${requestUrl}`,
                     options: {
-                        method: 'POST',
+                        method: 'GET',
                         headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
                             'X-Requested-With': 'XMLHttpRequest'
-                        },
-                        body: new URLSearchParams(requestData)
+                        }
+                    }
+                },
+                // 方式3: 直接嘗試（某些情況下可能有效）
+                {
+                    url: requestUrl,
+                    options: {
+                        method: 'GET',
+                        mode: 'cors',
+                        credentials: 'omit'
                     }
                 }
             ];
@@ -1965,15 +1957,19 @@
                         throw new Error(`HTTP錯誤: ${response.status}`);
                     }
 
-                    let data = await response.json();
+                    let htmlContent;
 
-                    // 如果使用了CORS代理，需要解析包裝的數據
-                    if (optionIndex === 1 && data.contents) {
-                        data = JSON.parse(data.contents);
+                    if (optionIndex === 0) {
+                        // allorigins 返回JSON包裝的HTML
+                        const data = await response.json();
+                        htmlContent = data.contents;
+                    } else {
+                        // 直接獲取HTML
+                        htmlContent = await response.text();
                     }
 
                     callingData.isConnected = true;
-                    const processedData = processMainpiData(data);
+                    const processedData = parseMainpiHtml(htmlContent);
                     resolve(processedData);
 
                 } catch (error) {
@@ -1986,8 +1982,8 @@
             tryFetch();
         }
 
-        // 處理mainpi.com的響應數據
-        function processMainpiData(data) {
+        // 解析mainpi.com的HTML頁面
+        function parseMainpiHtml(htmlContent) {
             const now = new Date();
             const processedData = {
                 timestamp: now.toLocaleTimeString('zh-TW'),
@@ -1995,43 +1991,90 @@
             };
 
             try {
-                // 根據mainpi的數據結構處理
-                if (data && data.callers) {
-                    data.callers.forEach((caller, index) => {
-                        if (caller.id === callingData.callerId) {
-                            // 解析叫號數據
-                            const callNums = caller.call_nums ? JSON.parse(caller.call_nums) : [];
-                            const ticketNums = caller.ticket_nums ? JSON.parse(caller.ticket_nums) : [];
+                // 創建一個虛擬DOM來解析HTML
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlContent, 'text/html');
 
-                            // 假設魏筱筠醫師是第一個隊列，鄭義銅醫師是第二個隊列
+                // 查找叫號數據 - 通常在 .queue-info 或類似的元素中
+                const queueElements = doc.querySelectorAll('.queue-info, .caller-info, [data-queue]');
+
+                if (queueElements.length === 0) {
+                    // 嘗試從JavaScript變數中提取數據
+                    const scriptTags = doc.querySelectorAll('script');
+                    let foundData = false;
+
+                    for (const script of scriptTags) {
+                        const scriptContent = script.textContent;
+
+                        // 查找包含叫號數據的JavaScript變數
+                        if (scriptContent.includes('call_nums') || scriptContent.includes('caller')) {
+                            const callerMatch = scriptContent.match(/callers\s*:\s*(\[.*?\])/s);
+                            const callNumsMatch = scriptContent.match(/call_nums['"]\s*:\s*['"]([^'"]*)['"]/);
+                            const ticketNumsMatch = scriptContent.match(/ticket_nums['"]\s*:\s*['"]([^'"]*)['"]/);
+
+                            if (callNumsMatch && ticketNumsMatch) {
+                                try {
+                                    const callNums = JSON.parse(callNumsMatch[1] || '[]');
+                                    const ticketNums = JSON.parse(ticketNumsMatch[1] || '[]');
+
+                                    processedData.queues[1] = {
+                                        current: callNums[0] || 0,
+                                        waiting: ticketNums[0] || 0,
+                                        active: callNums[0] > 0
+                                    };
+
+                                    processedData.queues[2] = {
+                                        current: callNums[1] || 0,
+                                        waiting: ticketNums[1] || 0,
+                                        active: callNums[1] > 0
+                                    };
+
+                                    foundData = true;
+                                    break;
+                                } catch (parseError) {
+                                    console.error('解析叫號數據失敗:', parseError);
+                                }
+                            }
+                        }
+                    }
+
+                    if (!foundData) {
+                        // 嘗試從HTML元素中提取數據
+                        const numberElements = doc.querySelectorAll('.number, .current-number, .queue-number');
+                        const waitingElements = doc.querySelectorAll('.waiting, .waiting-count, .queue-waiting');
+
+                        if (numberElements.length > 0) {
                             processedData.queues[1] = {
-                                current: callNums[0] || 0,
-                                waiting: ticketNums[0] || 0,
+                                current: parseInt(numberElements[0]?.textContent || '0') || 0,
+                                waiting: parseInt(waitingElements[0]?.textContent || '0') || 0,
                                 active: true
                             };
 
-                            if (callNums.length > 1) {
+                            if (numberElements.length > 1) {
                                 processedData.queues[2] = {
-                                    current: callNums[1] || 0,
-                                    waiting: ticketNums[1] || 0,
+                                    current: parseInt(numberElements[1]?.textContent || '0') || 0,
+                                    waiting: parseInt(waitingElements[1]?.textContent || '0') || 0,
                                     active: true
                                 };
                             } else {
-                                // 如果只有一個醫師在診，第二個診間顯示為休診
                                 processedData.queues[2] = {
                                     current: 0,
                                     waiting: 0,
                                     active: false
                                 };
                             }
+                            foundData = true;
                         }
-                    });
-                } else {
-                    // 如果數據格式不符預期，使用備用數據
-                    return generateFallbackData();
+                    }
+
+                    if (!foundData) {
+                        // 如果都找不到數據，返回備用數據
+                        return generateFallbackData();
+                    }
                 }
+
             } catch (error) {
-                console.error('數據處理錯誤:', error);
+                console.error('HTML解析錯誤:', error);
                 return generateFallbackData();
             }
 
@@ -2041,6 +2084,30 @@
         // 生成備用數據（當API無法訪問時）
         function generateFallbackData() {
             const now = new Date();
+
+            // 在開發模式下生成示例數據
+            const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+            if (isDevelopment || callingData.testMode) {
+                // 生成模擬的叫號數據供測試
+                return {
+                    timestamp: now.toLocaleTimeString('zh-TW'),
+                    queues: {
+                        1: {
+                            current: Math.floor(Math.random() * 50) + 1,
+                            waiting: Math.floor(Math.random() * 10) + 1,
+                            active: true
+                        },
+                        2: {
+                            current: Math.floor(Math.random() * 30) + 1,
+                            waiting: Math.floor(Math.random() * 8) + 1,
+                            active: Math.random() > 0.3
+                        }
+                    },
+                    testMode: true
+                };
+            }
+
             return {
                 timestamp: now.toLocaleTimeString('zh-TW'),
                 queues: {
@@ -2259,6 +2326,31 @@
             localStorage.setItem('callingSystemSound', callingData.soundEnabled);
         }
 
+        // 切換測試模式
+        function toggleTestMode() {
+            callingData.testMode = !callingData.testMode;
+            const testToggle = document.getElementById('test-toggle');
+            const testIcon = testToggle.querySelector('.test-icon');
+
+            if (callingData.testMode) {
+                testToggle.classList.add('active');
+                testIcon.textContent = '✅';
+                testToggle.querySelector('span:last-child').textContent = ' 測試模式ON';
+                updateApiStatusBanner('connected', '測試模式已啟用，顯示模擬數據');
+            } else {
+                testToggle.classList.remove('active');
+                testIcon.textContent = '🧪';
+                testToggle.querySelector('span:last-child').textContent = ' 測試模式';
+                updateApiStatusBanner('connecting');
+            }
+
+            // 立即刷新數據
+            refreshCallingStatus();
+
+            // 儲存設定到本地存儲
+            localStorage.setItem('callingSystemTestMode', callingData.testMode);
+        }
+
         // 顯示連接錯誤
         function showConnectionError() {
             const statusDot = document.getElementById('connection-status');
@@ -2298,6 +2390,18 @@
                     soundToggle.classList.add('muted');
                     soundToggle.querySelector('.sound-icon').textContent = '🔇';
                     soundToggle.querySelector('span:last-child').textContent = ' 靜音模式';
+                }
+            }
+
+            // 載入測試模式設定
+            const savedTestSetting = localStorage.getItem('callingSystemTestMode');
+            if (savedTestSetting !== null) {
+                callingData.testMode = savedTestSetting === 'true';
+                const testToggle = document.getElementById('test-toggle');
+                if (callingData.testMode && testToggle) {
+                    testToggle.classList.add('active');
+                    testToggle.querySelector('.test-icon').textContent = '✅';
+                    testToggle.querySelector('span:last-child').textContent = ' 測試模式ON';
                 }
             }
 
