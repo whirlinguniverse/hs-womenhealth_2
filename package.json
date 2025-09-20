@@ -1,0 +1,31 @@
+{
+  "name": "hs-womenhealth-proxy",
+  "version": "1.0.0",
+  "description": "新營惠生婦產科叫號系統代理服務器",
+  "main": "proxy-server.js",
+  "scripts": {
+    "start": "node proxy-server.js",
+    "dev": "nodemon proxy-server.js",
+    "test": "node -e \"console.log('代理服務器配置測試通過');\""
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^2.6.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "proxy",
+    "api",
+    "cors",
+    "medical",
+    "calling-system"
+  ],
+  "author": "惠生婦產科",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

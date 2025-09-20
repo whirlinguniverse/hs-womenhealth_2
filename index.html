@@ -1825,6 +1825,7 @@
             callerId: '1028', // 惠生婦產科的caller ID
             apiUrl: 'https://www.mainpi.com/.ws_mainpi/',
             ajaxUrl: 'https://www.mainpi.com/query', // 修正為正確的API端點
+            proxyUrl: '', // 代理服務器URL（將在init時設置）
             testMode: false // 測試模式開關
         };
 
@@ -1840,11 +1841,15 @@
                     return;
                 }
 
-                if (callingData.useWebSocket && window.WebSocket) {
-                    // 優先使用WebSocket
+                // 優先級：代理服務器 > WebSocket > AJAX
+                if (callingData.proxyUrl) {
+                    // 優先使用代理服務器
+                    fetchViaProxy(resolve, reject);
+                } else if (callingData.useWebSocket && window.WebSocket) {
+                    // 其次使用WebSocket
                     fetchViaWebSocket(resolve, reject);
                 } else {
-                    // 降級使用AJAX
+                    // 最後降級使用AJAX
                     fetchViaAjax(resolve, reject);
                 }
             });
@@ -1905,6 +1910,48 @@
                 console.log('WebSocket不可用，使用AJAX模式');
                 fetchViaAjax(resolve, reject);
             }
+        }
+
+        // 代理API方式獲取數據
+        function fetchViaProxy(resolve, reject) {
+            if (!callingData.proxyUrl) {
+                // 如果沒有代理服務器，降級到AJAX
+                fetchViaAjax(resolve, reject);
+                return;
+            }
+
+            const proxyEndpoint = `${callingData.proxyUrl}/api/calling/${callingData.callerId}`;
+
+            fetch(proxyEndpoint, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`代理服務器錯誤: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success && data.data) {
+                    callingData.isConnected = true;
+                    const processedData = {
+                        timestamp: data.timestamp,
+                        queues: data.data.queues
+                    };
+                    resolve(processedData);
+                } else {
+                    throw new Error(data.error || '代理服務器返回錯誤');
+                }
+            })
+            .catch(error => {
+                console.error('代理API失敗，降級到直接調用:', error);
+                // 降級到直接AJAX調用
+                fetchViaAjax(resolve, reject);
+            });
         }
 
         // AJAX方式獲取數據
@@ -2400,8 +2447,31 @@
             }
         }
 
+        // 自動檢測和設置代理服務器URL
+        function setupProxyUrl() {
+            const hostname = window.location.hostname;
+            const protocol = window.location.protocol;
+
+            // 根據環境設置代理URL
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+                // 本地開發環境
+                callingData.proxyUrl = 'http://localhost:3001';
+            } else if (hostname.includes('vercel.app') || hostname.includes('netlify.app') || hostname.includes('github.io')) {
+                // 部署在靜態網站服務上，需要另外的代理服務器
+                callingData.proxyUrl = ''; // 可以設置為你的代理服務器URL
+            } else {
+                // 自定義域名，假設代理服務器在同一域名下
+                callingData.proxyUrl = `${protocol}//${hostname}:3001`;
+            }
+
+            console.log(`代理服務器URL設置為: ${callingData.proxyUrl || '未設置'}`);
+        }
+
         // 頁面載入時初始化
         document.addEventListener('DOMContentLoaded', function() {
+            // 設置代理服務器URL
+            setupProxyUrl();
+
             // 載入聲音設定
             const savedSoundSetting = localStorage.getItem('callingSystemSound');
             if (savedSoundSetting !== null) {

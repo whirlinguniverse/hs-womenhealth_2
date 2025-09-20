@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "name": "hs-womenhealth-proxy",
+  "builds": [
+    {
+      "src": "proxy-server.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/proxy-server.js"
+    },
+    {
+      "src": "/health",
+      "dest": "/proxy-server.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
