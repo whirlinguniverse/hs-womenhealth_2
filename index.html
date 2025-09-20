@@ -1831,6 +1831,15 @@
         // 連接mainpi.com的真實API
         function fetchCallingData() {
             return new Promise((resolve, reject) => {
+                // 如果測試模式開啟，直接返回模擬數據
+                if (callingData.testMode) {
+                    setTimeout(() => {
+                        const testData = generateFallbackData();
+                        resolve(testData);
+                    }, 500); // 模擬網路延遲
+                    return;
+                }
+
                 if (callingData.useWebSocket && window.WebSocket) {
                     // 優先使用WebSocket
                     fetchViaWebSocket(resolve, reject);
@@ -2085,23 +2094,25 @@
         function generateFallbackData() {
             const now = new Date();
 
-            // 在開發模式下生成示例數據
+            // 在開發模式或測試模式下生成示例數據
             const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
             if (isDevelopment || callingData.testMode) {
-                // 生成模擬的叫號數據供測試
+                // 生成模擬的叫號數據供測試，讓號碼有變化
+                const baseTime = Math.floor(Date.now() / 10000); // 每10秒變化一次
+
                 return {
                     timestamp: now.toLocaleTimeString('zh-TW'),
                     queues: {
                         1: {
-                            current: Math.floor(Math.random() * 50) + 1,
-                            waiting: Math.floor(Math.random() * 10) + 1,
+                            current: (baseTime % 50) + 1,
+                            waiting: Math.floor(Math.random() * 8) + 1,
                             active: true
                         },
                         2: {
-                            current: Math.floor(Math.random() * 30) + 1,
-                            waiting: Math.floor(Math.random() * 8) + 1,
-                            active: Math.random() > 0.3
+                            current: ((baseTime + 5) % 40) + 1,
+                            waiting: Math.floor(Math.random() * 6) + 1,
+                            active: true
                         }
                     },
                     testMode: true
@@ -2130,8 +2141,8 @@
         function updateCallingDisplay(data) {
             document.getElementById('last-update').textContent = data.timestamp;
 
-            // 處理連接錯誤狀態
-            if (data.error) {
+            // 處理連接錯誤狀態（但不包括測試模式）
+            if (data.error && !data.testMode) {
                 showConnectionError();
                 // 顯示離線提示
                 Object.keys(data.queues).forEach(queueId => {
@@ -2289,8 +2300,10 @@
                 updateCallingDisplay(data);
                 callingData.lastUpdate = new Date();
 
-                if (data.error) {
+                if (data.error && !data.testMode) {
                     updateApiStatusBanner('offline');
+                } else if (data.testMode) {
+                    updateApiStatusBanner('connected', '測試模式：顯示模擬數據');
                 } else {
                     updateApiStatusBanner('connected');
                 }
@@ -2336,7 +2349,13 @@
                 testToggle.classList.add('active');
                 testIcon.textContent = '✅';
                 testToggle.querySelector('span:last-child').textContent = ' 測試模式ON';
+
+                // 立即顯示測試數據
+                const testData = generateFallbackData();
+                updateCallingDisplay(testData);
                 updateApiStatusBanner('connected', '測試模式已啟用，顯示模擬數據');
+
+                console.log('測試模式已啟用，數據:', testData);
             } else {
                 testToggle.classList.remove('active');
                 testIcon.textContent = '🧪';
@@ -2344,8 +2363,9 @@
                 updateApiStatusBanner('connecting');
             }
 
-            // 立即刷新數據
-            refreshCallingStatus();
+            // 重新啟動自動更新以調整更新間隔
+            stopAutoUpdate();
+            startAutoUpdate();
 
             // 儲存設定到本地存儲
             localStorage.setItem('callingSystemTestMode', callingData.testMode);
@@ -2365,10 +2385,11 @@
             // 立即更新一次
             refreshCallingStatus();
 
-            // 設定定期更新（30秒）
+            // 設定定期更新（測試模式下5秒，正常模式30秒）
+            const updateInterval = callingData.testMode ? 5000 : 30000;
             callingData.updateInterval = setInterval(() => {
                 refreshCallingStatus();
-            }, 30000);
+            }, updateInterval);
         }
 
         // 停止自動更新
