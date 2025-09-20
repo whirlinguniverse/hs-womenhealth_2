@@ -537,6 +537,17 @@
             border-left-color: #2c5aa0;
         }
 
+        .queue-card.offline {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-left-color: #6c757d;
+            opacity: 0.7;
+        }
+
+        .queue-card.offline .number-display {
+            background: #f8f9fa;
+            color: #6c757d;
+        }
+
         .queue-header {
             display: flex;
             justify-content: space-between;
@@ -904,6 +915,57 @@
             color: #ffc107;
             font-size: 0.9em;
             font-weight: 500;
+        }
+
+        /* API狀態橫幅樣式 */
+        .api-status-banner {
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            animation: pulse-warning 2s infinite;
+        }
+
+        .api-status-banner.error {
+            background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+            border-color: #dc3545;
+        }
+
+        .api-status-banner.success {
+            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+            border-color: #28a745;
+            animation: none;
+        }
+
+        .status-message {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .status-icon {
+            font-size: 1.2em;
+        }
+
+        .status-text {
+            color: #856404;
+            font-weight: 500;
+        }
+
+        .api-status-banner.error .status-text {
+            color: #721c24;
+        }
+
+        .api-status-banner.success .status-text {
+            color: #155724;
+        }
+
+        @keyframes pulse-warning {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
         }
 
         .testimonials-section {
@@ -1664,6 +1726,14 @@
                         </div>
                     </div>
 
+                    <!-- API連接狀態提示 -->
+                    <div class="api-status-banner" id="api-status-banner" style="display: none;">
+                        <div class="status-message">
+                            <span class="status-icon">⚠️</span>
+                            <span class="status-text">正在嘗試連接叫號系統...</span>
+                        </div>
+                    </div>
+
                     <div class="calling-grid">
                         <div class="queue-card" data-queue="1">
                             <div class="queue-header">
@@ -1742,39 +1812,275 @@
             lastUpdate: null,
             isConnected: false,
             soundEnabled: true,
-            updateInterval: null
+            updateInterval: null,
+            websocket: null,
+            useWebSocket: true,
+            callerId: '1028', // 惠生婦產科的caller ID
+            apiUrl: 'https://www.mainpi.com/.ws_mainpi/',
+            ajaxUrl: 'https://www.mainpi.com/.ws_mainpi/'
         };
 
-        // 模擬的叫號資料（實際應用時需要連接到真實的API）
+        // 連接mainpi.com的真實API
         function fetchCallingData() {
-            // 這裡應該連接到 mainpi 的 API
-            // 目前使用模擬資料
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
+                if (callingData.useWebSocket && window.WebSocket) {
+                    // 優先使用WebSocket
+                    fetchViaWebSocket(resolve, reject);
+                } else {
+                    // 降級使用AJAX
+                    fetchViaAjax(resolve, reject);
+                }
+            });
+        }
+
+        // WebSocket方式獲取數據
+        function fetchViaWebSocket(resolve, reject) {
+            try {
+                // 嘗試建立WebSocket連接
+                const wsUrl = `wss://www.mainpi.com/.ws_mainpi/`;
+                const ws = new WebSocket(wsUrl);
+
+                ws.onopen = function() {
+                    console.log('WebSocket連接已建立');
+                    callingData.websocket = ws;
+                    callingData.isConnected = true;
+
+                    // 發送查詢請求
+                    const queryData = {
+                        act: 'query_call',
+                        caller_list: callingData.callerId
+                    };
+                    ws.send(JSON.stringify(queryData));
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        const processedData = processMainpiData(data);
+                        resolve(processedData);
+                    } catch (error) {
+                        console.error('WebSocket數據解析錯誤:', error);
+                        // 降級到AJAX
+                        fetchViaAjax(resolve, reject);
+                    }
+                };
+
+                ws.onerror = function(error) {
+                    console.log('WebSocket錯誤，切換到AJAX模式');
+                    callingData.useWebSocket = false;
+                    fetchViaAjax(resolve, reject);
+                };
+
+                ws.onclose = function() {
+                    callingData.isConnected = false;
+                    callingData.websocket = null;
+                };
+
+                // 設置連接超時
                 setTimeout(() => {
-                    const now = new Date();
-                    const mockData = {
-                        timestamp: now.toLocaleTimeString('zh-TW'),
-                        queues: {
-                            1: {
-                                current: Math.floor(Math.random() * 50) + 1,
-                                waiting: Math.floor(Math.random() * 10) + 1,
-                                active: true
+                    if (ws.readyState === WebSocket.CONNECTING) {
+                        ws.close();
+                        fetchViaAjax(resolve, reject);
+                    }
+                }, 5000);
+
+            } catch (error) {
+                console.log('WebSocket不可用，使用AJAX模式');
+                fetchViaAjax(resolve, reject);
+            }
+        }
+
+        // AJAX方式獲取數據
+        function fetchViaAjax(resolve, reject) {
+            const requestData = {
+                act: 'query_call',
+                caller_list: callingData.callerId
+            };
+
+            // 嘗試多種方式處理CORS問題
+            const fetchOptions = [
+                // 方式1: 直接調用（如果mainpi.com支持CORS）
+                {
+                    url: callingData.ajaxUrl,
+                    options: {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'Accept': 'application/json'
+                        },
+                        body: new URLSearchParams(requestData),
+                        mode: 'cors',
+                        credentials: 'omit'
+                    }
+                },
+                // 方式2: 使用CORS代理
+                {
+                    url: `https://api.allorigins.win/get?url=${encodeURIComponent(callingData.ajaxUrl)}`,
+                    options: {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded'
                             },
-                            2: {
-                                current: Math.floor(Math.random() * 50) + 1,
-                                waiting: Math.floor(Math.random() * 8) + 1,
-                                active: Math.random() > 0.3
+                            body: new URLSearchParams(requestData).toString()
+                        })
+                    }
+                },
+                // 方式3: 使用另一個CORS代理
+                {
+                    url: `https://cors-anywhere.herokuapp.com/${callingData.ajaxUrl}`,
+                    options: {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        body: new URLSearchParams(requestData)
+                    }
+                }
+            ];
+
+            // 嘗試不同的方式
+            async function tryFetch(optionIndex = 0) {
+                if (optionIndex >= fetchOptions.length) {
+                    // 所有方式都失敗，回退到備用數據
+                    console.log('所有API請求方式都失敗，使用備用數據');
+                    callingData.isConnected = false;
+                    const fallbackData = generateFallbackData();
+                    resolve(fallbackData);
+                    return;
+                }
+
+                const { url, options } = fetchOptions[optionIndex];
+
+                try {
+                    console.log(`嘗試方式 ${optionIndex + 1}: ${url}`);
+                    const response = await fetch(url, options);
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP錯誤: ${response.status}`);
+                    }
+
+                    let data = await response.json();
+
+                    // 如果使用了CORS代理，需要解析包裝的數據
+                    if (optionIndex === 1 && data.contents) {
+                        data = JSON.parse(data.contents);
+                    }
+
+                    callingData.isConnected = true;
+                    const processedData = processMainpiData(data);
+                    resolve(processedData);
+
+                } catch (error) {
+                    console.error(`方式 ${optionIndex + 1} 失敗:`, error);
+                    // 嘗試下一種方式
+                    setTimeout(() => tryFetch(optionIndex + 1), 1000);
+                }
+            }
+
+            tryFetch();
+        }
+
+        // 處理mainpi.com的響應數據
+        function processMainpiData(data) {
+            const now = new Date();
+            const processedData = {
+                timestamp: now.toLocaleTimeString('zh-TW'),
+                queues: {}
+            };
+
+            try {
+                // 根據mainpi的數據結構處理
+                if (data && data.callers) {
+                    data.callers.forEach((caller, index) => {
+                        if (caller.id === callingData.callerId) {
+                            // 解析叫號數據
+                            const callNums = caller.call_nums ? JSON.parse(caller.call_nums) : [];
+                            const ticketNums = caller.ticket_nums ? JSON.parse(caller.ticket_nums) : [];
+
+                            // 假設魏筱筠醫師是第一個隊列，鄭義銅醫師是第二個隊列
+                            processedData.queues[1] = {
+                                current: callNums[0] || 0,
+                                waiting: ticketNums[0] || 0,
+                                active: true
+                            };
+
+                            if (callNums.length > 1) {
+                                processedData.queues[2] = {
+                                    current: callNums[1] || 0,
+                                    waiting: ticketNums[1] || 0,
+                                    active: true
+                                };
+                            } else {
+                                // 如果只有一個醫師在診，第二個診間顯示為休診
+                                processedData.queues[2] = {
+                                    current: 0,
+                                    waiting: 0,
+                                    active: false
+                                };
                             }
                         }
-                    };
-                    resolve(mockData);
-                }, 1000);
-            });
+                    });
+                } else {
+                    // 如果數據格式不符預期，使用備用數據
+                    return generateFallbackData();
+                }
+            } catch (error) {
+                console.error('數據處理錯誤:', error);
+                return generateFallbackData();
+            }
+
+            return processedData;
+        }
+
+        // 生成備用數據（當API無法訪問時）
+        function generateFallbackData() {
+            const now = new Date();
+            return {
+                timestamp: now.toLocaleTimeString('zh-TW'),
+                queues: {
+                    1: {
+                        current: '--',
+                        waiting: '--',
+                        active: false
+                    },
+                    2: {
+                        current: '--',
+                        waiting: '--',
+                        active: false
+                    }
+                },
+                error: true
+            };
         }
 
         // 更新叫號顯示
         function updateCallingDisplay(data) {
             document.getElementById('last-update').textContent = data.timestamp;
+
+            // 處理連接錯誤狀態
+            if (data.error) {
+                showConnectionError();
+                // 顯示離線提示
+                Object.keys(data.queues).forEach(queueId => {
+                    const currentEl = document.getElementById(`current-${queueId}`);
+                    const waitingEl = document.getElementById(`waiting-${queueId}`);
+                    const cardEl = document.querySelector(`[data-queue="${queueId}"]`);
+
+                    if (currentEl && waitingEl && cardEl) {
+                        currentEl.textContent = '--';
+                        waitingEl.textContent = '--';
+                        cardEl.classList.remove('active');
+                        cardEl.classList.add('offline');
+                    }
+                });
+                return;
+            }
 
             Object.keys(data.queues).forEach(queueId => {
                 const queue = data.queues[queueId];
@@ -1783,22 +2089,31 @@
                 const cardEl = document.querySelector(`[data-queue="${queueId}"]`);
 
                 if (currentEl && waitingEl && cardEl) {
+                    // 移除離線狀態
+                    cardEl.classList.remove('offline');
+
                     // 更新號碼和等候人數
                     const oldNumber = currentEl.textContent;
-                    const newNumber = queue.current.toString().padStart(3, '0');
+                    let newNumber;
+
+                    if (queue.current === 0 || queue.current === '--') {
+                        newNumber = '--';
+                    } else {
+                        newNumber = queue.current.toString().padStart(3, '0');
+                    }
 
                     currentEl.textContent = newNumber;
-                    waitingEl.textContent = queue.waiting;
+                    waitingEl.textContent = queue.waiting === 0 ? '--' : queue.waiting;
 
                     // 更新卡片狀態
-                    if (queue.active) {
+                    if (queue.active && queue.current > 0) {
                         cardEl.classList.add('active');
                     } else {
                         cardEl.classList.remove('active');
                     }
 
                     // 如果號碼有變化且啟用聲音提醒
-                    if (oldNumber !== '--' && oldNumber !== newNumber && callingData.soundEnabled) {
+                    if (oldNumber !== '--' && newNumber !== '--' && oldNumber !== newNumber && callingData.soundEnabled) {
                         playNotificationSound();
                         showNumberChangeEffect(currentEl);
                     }
@@ -1808,8 +2123,11 @@
             // 更新連接狀態
             const statusDot = document.getElementById('connection-status');
             if (statusDot) {
-                statusDot.classList.remove('offline');
-                callingData.isConnected = true;
+                if (callingData.isConnected) {
+                    statusDot.classList.remove('offline');
+                } else {
+                    statusDot.classList.add('offline');
+                }
             }
         }
 
@@ -1846,6 +2164,48 @@
             }, 500);
         }
 
+        // 更新API狀態橫幅
+        function updateApiStatusBanner(status, message) {
+            const banner = document.getElementById('api-status-banner');
+            const statusIcon = banner.querySelector('.status-icon');
+            const statusText = banner.querySelector('.status-text');
+
+            banner.className = 'api-status-banner';
+
+            switch (status) {
+                case 'connecting':
+                    banner.style.display = 'block';
+                    statusIcon.textContent = '🔄';
+                    statusText.textContent = '正在連接叫號系統...';
+                    break;
+                case 'connected':
+                    banner.classList.add('success');
+                    banner.style.display = 'block';
+                    statusIcon.textContent = '✅';
+                    statusText.textContent = '已成功連接到叫號系統';
+                    // 3秒後隱藏成功訊息
+                    setTimeout(() => {
+                        banner.style.display = 'none';
+                    }, 3000);
+                    break;
+                case 'error':
+                    banner.classList.add('error');
+                    banner.style.display = 'block';
+                    statusIcon.textContent = '❌';
+                    statusText.textContent = message || 'API連接失敗，顯示離線數據';
+                    break;
+                case 'offline':
+                    banner.classList.add('error');
+                    banner.style.display = 'block';
+                    statusIcon.textContent = '📡';
+                    statusText.textContent = '叫號系統離線，請稍後重試或直接來電詢問';
+                    break;
+                default:
+                    banner.style.display = 'none';
+                    break;
+            }
+        }
+
         // 手動刷新功能
         async function refreshCallingStatus() {
             const refreshBtn = document.querySelector('.refresh-btn');
@@ -1854,13 +2214,23 @@
             refreshBtn.classList.add('spinning');
             refreshBtn.disabled = true;
 
+            // 顯示連接狀態
+            updateApiStatusBanner('connecting');
+
             try {
                 const data = await fetchCallingData();
                 updateCallingDisplay(data);
                 callingData.lastUpdate = new Date();
+
+                if (data.error) {
+                    updateApiStatusBanner('offline');
+                } else {
+                    updateApiStatusBanner('connected');
+                }
             } catch (error) {
                 console.error('更新叫號資料失敗:', error);
                 showConnectionError();
+                updateApiStatusBanner('error', error.message);
             } finally {
                 setTimeout(() => {
                     refreshBtn.classList.remove('spinning');
